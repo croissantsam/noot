@@ -1,0 +1,101 @@
+name: Weekly Dependency Update & Build Check
+
+on:
+  schedule:
+    # Run every Monday at 10:00 AM UTC
+    - cron: "0 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-and-check:
+    name: Update Dependencies & Run Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Update dependencies
+        id: update
+        run: |
+          # Update all dependencies to latest versions
+          pnpm update --latest
+
+          # Check if there are any changes
+          if git diff --quiet pnpm-lock.yaml; then
+            echo "No dependency updates available"
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Dependencies updated"
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run linter
+        if: steps.update.outputs.has_updates == 'true'
+        run: pnpm lint
+
+      - name: Run typecheck
+        if: steps.update.outputs.has_updates == 'true'
+        run: pnpm typecheck
+
+      - name: Run build
+        if: steps.update.outputs.has_updates == 'true'
+        run: pnpm build
+
+      - name: Create Pull Request
+        if: steps.update.outputs.has_updates == 'true'
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update dependencies"
+          title: "chore: weekly dependency updates"
+          body: |
+            This PR contains the weekly automated dependency updates.
+
+            **Changes:**
+            - Updated all dependencies to their latest versions
+            - Ran linter, typecheck, and build to verify compatibility
+
+            **Checks performed:**
+            - ✅ Lint
+            - ✅ TypeCheck
+            - ✅ Build
+
+          branch: weekly/dependency-updates
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+
+      - name: Enable auto merge
+        if: steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge \
+            "${{ steps.cpr.outputs.pull-request-number }}" \
+            --auto \
+            --squash
